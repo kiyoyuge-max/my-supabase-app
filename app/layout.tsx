@@ -1,10 +1,24 @@
-import type { Metadata } from 'next'
+import type { Metadata, Viewport } from "next";
 import './globals.css'
 import AppClientLayout from './app-client'
+
+export const viewport: Viewport = {
+  themeColor: "#0ea5e9",
+};
 
 export const metadata: Metadata = {
   title: 'My App',
   description: 'Supabase Auth Example',
+  manifest: '/manifest.webmanifest',
+  themeColor: '#ffffff',
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: 'default',
+    title: 'My App',
+  },
+  icons: {
+    apple: '/icons/apple-touch-icon.png',
+  },
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
