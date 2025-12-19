@@ -1,6 +1,19 @@
 'use client';
 
-import Image from "next/image";
+/**
+ * app/page.tsx（完成版 / コメント付き）
+ *
+ * 目的：
+ * - ブラウザの Geolocation で「現在地（緯度・経度）」を取得
+ * - Next.js の Route Handler（/api/reverse-geocode）経由で Google Geocoding API に逆ジオコーディング
+ * - Google の formatted_address を「県市町＋番地」までに正規化して画面に表示
+ *
+ * ポイント：
+ * - 住所の精度は Google の formatted_address を “正” として扱う
+ *   -> address_components だけで組み立てると、日本では「9-34」のようなハイフン後半が欠けるケースがあるため
+ * - APIキーはクライアントに置かず、サーバ側（Route Handler）に隠蔽
+ */
+
 import {
   useState,
   useEffect,
@@ -8,7 +21,7 @@ import {
   KeyboardEvent,
 } from 'react';
 import { supabase } from '../lib/supabase';
-import { useAuth } from '../contexts/AuthContext'; // ★ 追加
+import { useAuth } from '../contexts/AuthContext';
 
 type Todo = {
   id: string;
@@ -18,13 +31,15 @@ type Todo = {
 };
 
 export default function Home() {
-  const { signOut } = useAuth(); // ★ 追加
+  // AuthContext 側で提供されているサインアウト
+  const { signOut } = useAuth();
 
+  // Todo関連
   const [todos, setTodos] = useState<Todo[]>([]);
   const [newTaskTitle, setNewTaskTitle] = useState('');
   const [loading, setLoading] = useState(true);
 
-  // 位置情報関連
+  // 位置情報関連（表示用）
   const [lat, setLat] = useState<number | null>(null);
   const [lng, setLng] = useState<number | null>(null);
   const [locating, setLocating] = useState(false);
@@ -36,30 +51,35 @@ export default function Home() {
     fetchTodos();
   }, []);
 
-  // ↓↓SupabaseのEdge Functionの利用例
-  const [msg, setMsg] = useState<string | null>(null)
+  // ============================================================
+  // Supabase Edge Function 呼び出しサンプル（デモ用）
+  // ============================================================
+  const [msg, setMsg] = useState<string | null>(null);
+
   const callHello = async () => {
     try {
       const { data, error } = await supabase.functions.invoke<{
         message: string
       }>('hello-world', {
-        body: { name: 'Kiyo' },  // ← Edge Function 側の { name } に対応
-      })
+        body: { name: 'Kiyo' },
+      });
 
       if (error) {
-        console.error('Edge Function error:', error)
-        setMsg(`エラー: ${error.message}`)
-        return
+        console.error('Edge Function error:', error);
+        setMsg(`エラー: ${error.message}`);
+        return;
       }
 
-      setMsg(data?.message ?? 'no message')
+      setMsg(data?.message ?? 'no message');
     } catch (err: any) {
-      console.error('invoke そのものが失敗:', err)
-      setMsg(`通信エラー: ${err.message ?? String(err)}`)
+      console.error('invoke failed:', err);
+      setMsg(`通信エラー: ${err.message ?? String(err)}`);
     }
-  }
-  // ↑↑SupabaseのEdge Functionの利用例
+  };
 
+  // ============================================================
+  // Todo: 取得
+  // ============================================================
   async function fetchTodos() {
     try {
       setLoading(true);
@@ -79,6 +99,9 @@ export default function Home() {
     }
   }
 
+  // ============================================================
+  // Todo: 追加
+  // ============================================================
   async function addTodo() {
     if (!newTaskTitle) return;
 
@@ -93,12 +116,16 @@ export default function Home() {
       if (data) {
         setTodos((prev) => [...(data as Todo[]), ...prev]);
       }
+
       setNewTaskTitle('');
     } catch (error: any) {
       alert('Error adding todo: ' + error.message);
     }
   }
 
+  // ============================================================
+  // Todo: 完了/未完了トグル
+  // ============================================================
   async function toggleTodoCompleted(id: string, currentStatus: boolean) {
     try {
       const { error } = await supabase
@@ -118,6 +145,9 @@ export default function Home() {
     }
   }
 
+  // ============================================================
+  // Todo: 削除
+  // ============================================================
   async function deleteTodo(id: string) {
     try {
       const { error } = await supabase
@@ -133,67 +163,90 @@ export default function Home() {
     }
   }
 
+  // 入力欄の変更
   function handleChange(e: ChangeEvent<HTMLInputElement>) {
     setNewTaskTitle(e.target.value);
   }
 
+  // Enterで追加
   function handleKeyDown(e: KeyboardEvent<HTMLInputElement>) {
     if (e.key === 'Enter') {
       addTodo();
     }
   }
 
-  // ★ 日本式住所フォーマット
-  function formatJapaneseAddress(addr: any): string {
-    if (!addr) return '';
+  // ============================================================
+  // Google Geocoding: 住所文字列の正規化
+  // ============================================================
+  /**
+   * Google の formatted_address を「県市町＋番地」までに正規化する。
+   *
+   * 例）
+   *  raw: "日本、〒851-0133 長崎県長崎市矢上町５０−２ アメニティーハウス１"
+   *  -> "長崎県長崎市矢上町５０−２"
+   *
+   * 仕様：
+   * - 国名（日本）を削除
+   * - 郵便番号（〒xxx-xxxx）を削除
+   * - 建物名が付く場合は、番地以降のスペース区切りの後半を落とす
+   */
+  function normalizeGoogleFormattedAddress(formatted: string): string {
+    if (!formatted) return '';
 
-    const postcode = addr.postcode || '';
+    let s = formatted;
 
-    const prefecture =
-      addr.state ||
-      addr.province ||
-      addr.region ||
-      '';
+    // 先頭の国名を削除（"日本、" / "日本 " など）
+    s = s.replace(/^日本[、,\s]*/u, '');
 
-    const city =
-      addr.city ||
-      addr.city_district ||
-      addr.town ||
-      addr.village ||
-      addr.county ||
-      '';
+    // 先頭の郵便番号を削除（"〒123-4567 " / "123-4567 "）
+    s = s.replace(/^〒?\d{3}-\d{4}\s*/u, '');
 
-    const town =
-      addr.suburb ||
-      addr.neighbourhood ||
-      addr.hamlet ||
-      addr.quarter ||
-      '';
+    // カンマ区切りの場合もあるので、カンマをスペースに寄せる
+    s = s.replace(/,\s*/g, ' ');
 
-    const block = addr.block || '';
-    const road = addr.road || '';
-    const houseNumber = addr.house_number || '';
+    // 建物名を削除：番地の後にスペースがある場合、その後ろは建物名として落とす
+    s = s.split(' ')[0];
 
-    const parts = [
-      prefecture,
-      city,
-      town,
-      block,
-      `${road}${houseNumber}`,
-    ].filter((p) => p && p.trim().length > 0);
-
-    const core = parts.join(' ');
-
-    return postcode ? `〒${postcode} ${core}` : core;
+    return s.trim();
   }
 
-  // 現在地取得 → 住所＆緯度経度セット
+  /**
+   * Google Geocoding API の status をユーザー向けメッセージに変換
+   * - ユーザーには「何をすれば良いか」が伝わる文章にする
+   */
+  function geocodeStatusMessage(status: string): string {
+    switch (status) {
+      case 'ZERO_RESULTS':
+        return '住所を特定できませんでした。';
+      case 'OVER_QUERY_LIMIT':
+        return '位置情報の取得が混み合っています。しばらくして再試行してください。';
+      case 'REQUEST_DENIED':
+        return '位置情報サービスの設定に問題があります。';
+      case 'INVALID_REQUEST':
+        return '位置情報の形式が正しくありません。';
+      default:
+        return `位置情報取得エラー（${status}）`;
+    }
+  }
+
+  // ============================================================
+  // 現在地取得 → 逆ジオコーディング（Google）
+  // ============================================================
+  /**
+   * 1) ブラウザの Geolocation API で緯度経度を取得
+   * 2) /api/reverse-geocode（Route Handler）を呼び出し
+   * 3) Googleの formatted_address を正規化して住所表示
+   *
+   * ※ enableHighAccuracy は false（PC/Wi-Fi環境でタイムアウトしやすいため）
+   * ※ APIキーはサーバ側に隠蔽している（クライアントに漏らさない）
+   */
   function handleGetCurrentLocation() {
     if (!navigator.geolocation) {
       setLocationError('このブラウザは位置情報取得に対応していません。');
       return;
     }
 
+    // UI状態初期化
     setLocating(true);
     setLocationError(null);
     setAddress(null);
@@ -202,61 +255,87 @@ export default function Home() {
 
     navigator.geolocation.getCurrentPosition(
       async (position) => {
-        const { latitude, longitude } = position.coords;
+        const { latitude, longitude, accuracy } = position.coords;
 
+        // 画面に緯度経度は表示したいので先にセット
         setLat(latitude);
         setLng(longitude);
 
         try {
-          const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${latitude}&lon=${longitude}&addressdetails=1&accept-language=ja`;
-
-          const res = await fetch(url, {
-            headers: { 'User-Agent': 'my-nextjs-app' },
-          });
-
-          if (!res.ok) throw new Error('住所情報の取得に失敗しました');
-
+          // ★ 自作Route Handler（Google Geocoding）を呼ぶ
+          // - ここで Google APIキーを使う（クライアントにキーは置かない）
+          const res = await fetch(
+            `/api/reverse-geocode?lat=${latitude}&lon=${longitude}`
+          );
           const data = await res.json();
-          console.log('Nominatim raw data:', data);
-          console.log('Nominatim address:', data.address);
 
-          const formatted = formatJapaneseAddress(data.address);
+          // HTTPレベルの失敗（サーバ側で error を返している場合）
+          if (!res.ok) {
+            throw new Error(data?.error ?? 'サーバーエラーが発生しました');
+          }
 
-          setAddress(formatted || '住所を特定できませんでした');
+          // Google Geocoding API の status チェック
+          if (data.status !== 'OK') {
+            throw new Error(geocodeStatusMessage(data.status));
+          }
+
+          // 一般に先頭の results[0] が最も妥当（Route Handler 側で result_type 等を絞っている前提）
+          const raw = data.results?.[0]?.formatted_address ?? '';
+          const normalized = normalizeGoogleFormattedAddress(raw);
+
+          // normalized を優先して表示（番地まで残し、建物名は落とす）
+          setAddress(normalized || raw || '住所を特定できませんでした');
+
+          // デバッグログ（必要なら残す）
+          console.log('[GEO]', { latitude, longitude, accuracy });
+          console.log('[GEOCODE raw]', raw);
+          console.log('[GEOCODE normalized]', normalized);
         } catch (err: any) {
+          console.error('[GEOCODE ERROR]', err);
           setLocationError(err.message ?? '住所の取得に失敗しました。');
         } finally {
           setLocating(false);
         }
       },
       (error) => {
+        // 位置情報取得のエラー（ユーザー操作や端末設定が原因になりやすい）
+        console.error('[GEO ERROR]', error);
+
+        let msg = '位置情報の取得に失敗しました。';
         switch (error.code) {
           case error.PERMISSION_DENIED:
-            setLocationError('位置情報の利用が拒否されました。');
+            msg = '位置情報の利用が許可されていません。';
             break;
           case error.POSITION_UNAVAILABLE:
-            setLocationError('位置情報を取得できませんでした。');
+            msg = '現在地を取得できませんでした。';
             break;
           case error.TIMEOUT:
-            setLocationError('位置情報の取得がタイムアウトしました。');
+            msg = '位置情報の取得がタイムアウトしました。';
             break;
           default:
-            setLocationError('位置情報の取得中にエラーが発生しました。');
+            // error.message はブラウザによって内容がまちまちなので、ログのみ詳しく残す
+            msg = '位置情報の取得中にエラーが発生しました。';
+            break;
         }
+
+        setLocationError(msg);
         setLocating(false);
       },
       {
-        enableHighAccuracy: true,
+        // PC/Wi-Fi環境で enableHighAccuracy:true だとタイムアウトしやすいので false 推奨
+        enableHighAccuracy: false,
         timeout: 30000,
-        maximumAge: 0
+        maximumAge: 0,
       }
     );
   }
 
+  // ============================================================
+  // UI
+  // ============================================================
   return (
     <main className="max-w-xl mx-auto p-4">
-
-      {/* ★ 右上ログアウトボタン */}
+      {/* 右上ログアウトボタン */}
       <div className="flex justify-end mb-4">
         <button
           onClick={signOut}
@@ -325,10 +404,12 @@ export default function Home() {
           {locating ? '現在地取得中...' : '現在地の住所を取得'}
         </button>
 
+        {/* エラー表示（ユーザー向けは簡潔に） */}
         {locationError && (
           <p className="mt-2 text-sm text-red-500">{locationError}</p>
         )}
 
+        {/* 住所＆緯度経度表示 */}
         {(address || (lat !== null && lng !== null)) && (
           <div className="mt-2 text-sm">
             {address && (
@@ -349,9 +430,12 @@ export default function Home() {
           </div>
         )}
       </div>
+
+      {/* Supabase Edge Function 呼び出し（デモ） */}
       <button
         onClick={callHello}
-        className="px-4 py-2 border rounded bg-blue-500 text-white">
+        className="px-4 py-2 border rounded bg-blue-500 text-white"
+      >
         hello-world を呼ぶ
       </button>
 
