@@ -208,7 +208,7 @@ export default function Home() {
         setLng(longitude);
 
         try {
-          const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${latitude}&lon=${longitude}&addressdetails=1`;
+          const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${latitude}&lon=${longitude}&addressdetails=1&accept-language=ja`;
 
           const res = await fetch(url, {
             headers: { 'User-Agent': 'my-nextjs-app' },
